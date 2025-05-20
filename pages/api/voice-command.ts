@@ -1,4 +1,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
+/**
+ * This is a voice command interpreter for the music player.
+ * It uses Ollama to parse the command and return a JSON object.
+ * You can use the new Browser based SpeechRecognition API to get the command from the user.
+ * https://developer.mozilla.org/en-US/docs/Web/API/SpeechRecognition
+ * Or you can also streamline the recording audio to https://wit.ai
+ * I have made a discord bot with that functionality, if you are interested in that https://github.com/Tomato6966/voice-controlled-discord-bot
+ */
 
 // Define the structure for the voice commands
 interface VoiceCommand {
