@@ -9,7 +9,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const list = await YouTube.getPlaylist(`https://music.youtube.com/watch?v=${videoId}&list=RD${videoId}`)
+    const list = await YouTube.getPlaylist(`https://www.youtube.com/watch?v=${videoId}&list=RD${videoId}`)
     const videos = list.videos.filter(vid => vid.id !== videoId).slice(0, 15)
     if (!videos?.length) {
       return res.status(404).json({ error: "No results found" });

@@ -2,7 +2,7 @@ import { NextApiRequest, NextApiResponse } from "next";
 import YouTube, { Video } from "youtube-sr";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-    const { query } = req.query as { q?: string };
+    const { query } = req.query as { query?: string };
 
     if (!query) {
         return res.status(400).json({ error: "Query is required" });

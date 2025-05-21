@@ -5,7 +5,7 @@ import "react-tooltip/dist/react-tooltip.css";
 
 import {
 	ArrowUp, Clock, Eye, EyeOff, GripVertical, List, Menu, Music, PauseIcon, Play, PlayIcon, Plus,
-	Search, SearchCheck, ShuffleIcon, Timer, Trash2, UserIcon, X
+	Search, ShuffleIcon, Timer, Trash2, UserIcon, X
 } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
 import AudioPlayer from "react-h5-audio-player";
@@ -92,6 +92,12 @@ const AudioPlayerComponent = () => {
 
     // Add this new state to track playback position
     const [currentPlaybackPosition, setCurrentPlaybackPosition] = useState<number>(0);
+
+    // Destructure state for easier access in JSX
+    const { query, results, isLoading: isLoadingVideo, mode: searchMode, isSidebarOpen, showAutoSwitchTooltip } = searchState;
+    const { currentVideo: videoData, audioSrc, isLoading: isLoadingAudio, autoplayEnabled, currentFilters } = playerState;
+    const { items: queue, draggedItem } = queueState;
+
 
     // Load queue from localStorage on component mount
     useEffect(() => {
@@ -182,15 +188,32 @@ const AudioPlayerComponent = () => {
         updateQueueSources();
     }, [queueState.items, queueState.sources]);
 
+    // Enhanced mobile detection
     useEffect(() => {
         const checkMobile = () => {
-            setIsMobile(window.innerWidth < 768);
+            const isMobileDevice = window.innerWidth < 768 ||
+                /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            setIsMobile(isMobileDevice);
         };
 
         checkMobile();
         window.addEventListener('resize', checkMobile);
         return () => window.removeEventListener('resize', checkMobile);
     }, []);
+
+    // Ensure proper sidebar behavior on mobile
+    useEffect(() => {
+        if (isMobile && isSidebarOpen) {
+            // Add class to prevent body scrolling when sidebar is open
+            document.body.classList.add('overflow-hidden');
+        } else {
+            document.body.classList.remove('overflow-hidden');
+        }
+
+        return () => {
+            document.body.classList.remove('overflow-hidden');
+        };
+    }, [isMobile, isSidebarOpen]);
 
     useEffect(() => {
         // Auto-switch to 'enqueue' mode once a track is playing, unless user manually changed it
@@ -334,7 +357,7 @@ const AudioPlayerComponent = () => {
                 await handleSelectVideo(suggestions[0]);
                 setQueueState(prev => ({
                     ...prev,
-                    items: suggestions
+                    items: suggestions.slice(1)
                 }));
             } else {
                 console.error("Error fetching search results:", suggestions);
@@ -484,11 +507,6 @@ const AudioPlayerComponent = () => {
         };
     }, [playerState.audioSrc]); // Re-attach when audio source changes
 
-    // Destructure state for easier access in JSX
-    const { query, results, isLoading: isLoadingVideo, mode: searchMode, isSidebarOpen, showAutoSwitchTooltip } = searchState;
-    const { currentVideo: videoData, audioSrc, isLoading: isLoadingAudio, autoplayEnabled, currentFilters } = playerState;
-    const { items: queue, draggedItem } = queueState;
-
     // Add this useEffect to update the document title when a song changes
     useEffect(() => {
         // Store original document title when component mounts
@@ -507,50 +525,59 @@ const AudioPlayerComponent = () => {
         };
     }, [playerState.currentVideo]);
 
+    // Add missing touch handler for mobile queue reordering
+    const handleTouchStart = (index: number) => {
+        // For simple touch UI on queue items (like showing controls or playing)
+        // This could expand to show more options on mobile
+        if (audioElementRef.current?.audio?.current) {
+            handleSelectVideo(queue[index]);
+        }
+    };
+
     return (
         <>
-            <h1 className="text-blue-500/40 hover:text-blue-300/60 text-3xl font-bold top-4 left-4 absolute">Music-Manager Player</h1>
+            <h1 className="text-blue-500/40 hover:text-blue-300/60 text-3xl font-bold top-4 left-4 absolute md:block hidden">Music-Manager Player</h1>
             <div className="flex w-full items-center justify-center">
-                <div className={`w-[50dvw] rounded-2xl bg-gradient-to-br from-[#0c111c] to-[#131934] text-white relative max-h-[90dvh] transition-all duration-300 ${isSidebarOpen && !isMobile ? "mr-96" : ""}`}>
+                {/* Adjust main container width for mobile */}
+                <div className={`${isMobile ? 'w-full' : 'w-[50dvw]'} rounded-2xl bg-gradient-to-br from-[#0c111c] to-[#131934] text-white relative max-h-[90dvh] transition-all duration-300 ${isSidebarOpen && !isMobile ? "mr-96" : ""}`}>
                     {/* Main Content */}
-                    <div className={`transition-all duration-300 px-4`}>
-                        <div className={`container mx-auto py-8 transition-all duration-300 max-w-4xl`}>
-                            {/* Search Section */}
-                            <div className="relative mb-8">
-                                <div className="flex gap-4 items-center bg-gray-800/50 backdrop-blur-sm rounded-lg p-2">
-                                    <Search className="text-gray-400 w-6 h-6 ml-2" />
-                                    <input
-                                        type="text"
-                                        value={query}
-                                        onChange={(e) => setSearchState(prev => ({ ...prev, query: e.target.value }))}
-                                        onKeyPress={handleKeyPress}
-                                        placeholder="Search for a song..."
-                                        className="w-full bg-transparent border-none focus:outline-none text-lg placeholder-gray-500"
-                                    />
-                                    <div className="flex items-center gap-2">
-                                        <Tooltip
-                                            id="showing_instant_move"
-                                            delayShow={0}
-                                            delayHide={300}
-                                            isOpen={showAutoSwitchTooltip}
-                                            content={"Automatically switched to enqueue mode"}
-                                            place="top"
-                                            className="z-50 max-w-xs"
-                                            anchorSelect="#toggleModeButton"
+                    <div className={`transition-all duration-300 px-4 ${isMobile ? 'py-4' : ''}`}>
+                        <div className={`container mx-auto py-8 transition-all duration-300 max-w-4xl ${isMobile ? 'py-4' : ''}`}>
+                            {/* Search Section - Simplified for mobile */}
+                            <div className="relative mb-8 md:mb-8 mb-4">
+                                <div className="flex flex-wrap justify-center items-center bg-gray-800/50 backdrop-blur-sm rounded-lg p-2 gap-2">
+                                    <div className="flex-1 flex items-center gap-2">
+                                        <Search className="text-gray-400 w-6 h-6 ml-2 flex-shrink-0" />
+                                        <input
+                                            type="text"
+                                            value={query}
+                                            onChange={(e) => setSearchState(prev => ({ ...prev, query: e.target.value }))}
+                                            onKeyPress={handleKeyPress}
+                                            placeholder="Search for a song..."
+                                            className="w-full bg-transparent border-none focus:outline-none text-lg placeholder-gray-500"
                                         />
-                                        <div
-                                            ref={toggleRef}
-                                            id="toggleModeButton"
-                                            className="flex items-center cursor-pointer rounded-lg overflow-hidden transition-all duration-300 text-xs"
-                                            onClick={toggleSearchMode}
-                                        >
-                                            <div className={`px-4 py-2 flex items-center gap-2 ${searchMode === 'play' ? 'bg-blue-600' : 'bg-blue-600/40 text-gray-800'} transition-all duration-300`}>
-                                                <SearchCheck className="w-5 h-5" />
-                                                <span>Play</span>
-                                            </div>
-                                            <div className={`px-4 py-2 flex items-center gap-2 ${searchMode === 'enqueue' ? 'bg-purple-600' : 'bg-purple-600/40  text-gray-800'} transition-all duration-300`}>
-                                                <List className="w-5 h-5" />
-                                                <span>Enqueue</span>
+                                    </div>
+                                    <div className="flex flex-1 items-center gap-2">
+                                        <div ref={toggleRef} id="toggleModeButton" className="p-1 rounded-lg border-2 border-gray-500/40 overflow-hidden">
+                                            <div className="flex items-center h-8 w-full relative">
+                                                <div
+                                                    className={`absolute inset-0 ${searchMode === 'play' ? 'translate-x-0' : 'translate-x-full'}
+                                                    transition-transform duration-300 bg-blue-500/50 h-full w-1/2 rounded-md z-0`}
+                                                ></div>
+                                                <div
+                                                    onClick={toggleSearchMode}
+                                                    className={`px-4 py-2 z-10 flex items-center gap-2 cursor-pointer ${searchMode === 'play' ? 'bg-blue-600' : 'bg-blue-600/40 text-gray-800'} transition-all duration-300`}
+                                                >
+                                                    <Play className="w-5 h-5" />
+                                                    <span className="hidden md:inline">Play</span>
+                                                </div>
+                                                <div
+                                                    onClick={toggleSearchMode}
+                                                    className={`px-4 py-2 z-10 flex items-center gap-2 cursor-pointer ${searchMode === 'enqueue' ? 'bg-purple-600' : 'bg-purple-600/40 text-gray-800'} transition-all duration-300`}
+                                                >
+                                                    <List className="w-5 h-5" />
+                                                    <span className="hidden md:inline">Enqueue</span>
+                                                </div>
                                             </div>
                                         </div>
                                         <Tooltip id="search_button" delayShow={0} delayHide={0} content={"Hit 'Enter' to trigger search"} />
@@ -560,17 +587,18 @@ const AudioPlayerComponent = () => {
                                             className="flex items-center gap-2 px-4 py-2 bg-gray-700/80 hover:bg-gray-700 backdrop-blur-sm rounded-lg transition-all duration-300 hover:scale-105"
                                         >
                                             <Search className="w-5 h-5" />
-                                            Search
+                                            <span className="hidden md:inline">Search</span>
                                         </button>
                                     </div>
                                 </div>
                             </div>
 
-                            {/* Player Section */}
+                            {/* Player Section - Adjust layout for mobile */}
                             {videoData && (
-                                <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl p-6 shadow-2xl relative">
-                                    <div className="flex flex-col md:flex-row gap-8 items-center mb-6">
-                                        <div className="w-full md:w-1/3">
+                                <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl p-6 md:p-6 p-4 shadow-2xl relative">
+                                    <div className="flex flex-col md:flex-row gap-8 md:gap-8 gap-4 items-center mb-6 md:mb-6 mb-4">
+                                        {/* Make thumbnail smaller on mobile */}
+                                        <div className={`${isMobile ? 'w-2/3' : 'w-full md:w-1/3'}`}>
                                             <div className="relative group">
                                                 <img
                                                     src={videoData.thumbnail?.url}
@@ -580,33 +608,37 @@ const AudioPlayerComponent = () => {
                                                 <div className="absolute inset-0 bg-black/20 group-hover:bg-black/10 transition-all duration-300 rounded-lg" />
                                             </div>
                                         </div>
-                                        <div className="w-full md:w-2/3 space-y-4">
-                                            <h3 className="text-2xl font-bold leading-tight">{videoData.title}</h3>
-                                            <div className="flex items-center gap-2 text-gray-400">
+                                        {/* Song info with mobile-friendly font sizes */}
+                                        <div className="w-full md:w-2/3 space-y-4 md:space-y-4 space-y-2 text-center md:text-left">
+                                            <h3 className="text-xl md:text-2xl font-bold leading-tight">{videoData.title}</h3>
+                                            <div className="flex items-center gap-2 text-gray-400 justify-center md:justify-start">
                                                 <Music className="w-4 h-4" />
                                                 <span>{videoData.channel?.name}</span>
                                             </div>
-                                            <div className="flex items-center gap-2 text-gray-400">
+                                            <div className="flex items-center gap-2 text-gray-400 justify-center md:justify-start">
                                                 <Timer className="w-4 h-4" />
                                                 <span className="text-sm">Duration: {videoData.duration_formatted}</span>
                                             </div>
                                         </div>
                                     </div>
 
+                                    {/* Loading spinner */}
                                     {isLoadingAudio && <div className="flex justify-center items-center h-24">
                                         <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
                                     </div>}
+
+                                    {/* Adjust audio player for mobile */}
                                     {audioSrc && (
                                         <>
                                             <AudioPlayer
                                                 src={audioSrc}
                                                 autoPlay
-                                                showJumpControls
+                                                showJumpControls={!isMobile}
                                                 showSkipControls
                                                 onClickNext={() => {
                                                     return handleEndedAudio();
                                                 }}
-                                                className="rounded-lg overflow-hidden shadow-lg relative z-20"
+                                                className={`rounded-lg overflow-hidden shadow-lg relative z-20 ${isMobile ? 'rhap_custom-mobile' : ''}`}
                                                 onEnded={() => handleEndedAudio()}
                                                 onLoadStart={() => setAudioLoaded(true)}
                                                 ref={audioElementRef}
@@ -624,30 +656,32 @@ const AudioPlayerComponent = () => {
                         </div>
                     </div>
 
-                    {/* Hamburger Menu Button */}
+                    {/* Hamburger Menu Button - Larger touch target for mobile */}
                     {!isSidebarOpen && (
                         <button
                             onClick={() => setSearchState(prev => ({ ...prev, isSidebarOpen: true }))}
-                            className="fixed right-0 top-1/2 -translate-y-1/2 bg-gray-800/95 backdrop-blur-sm p-2 rounded-l-lg shadow-lg hover:bg-gray-700/95 transition-all duration-300 group"
+                            className={`fixed right-0 top-1/2 -translate-y-1/2 bg-gray-800/95 backdrop-blur-sm ${isMobile ? 'p-3' : 'p-2'} rounded-l-lg shadow-lg hover:bg-gray-700/95 transition-all duration-300 group`}
                         >
-                            <Menu className="w-6 h-6 text-white group-hover:scale-110 transition-transform duration-300" />
+                            <Menu className={`${isMobile ? 'w-7 h-7' : 'w-6 h-6'} text-white group-hover:scale-110 transition-transform duration-300`} />
                         </button>
                     )}
+
+                    {/* Queue section with mobile adjustments */}
                     <div className="flex flex-wrap gap-4 p-4 w-full justify-center items-center">
                         <div className="w-full flex items-center justify-center gap-x-4 gap-y-2 flex-wrap">
-                            <h1 className="text-3xl text-blue-500/40 hover:text-blue-300/60 transition-all duration-300">Queue</h1>
+                            <h1 className="text-2xl md:text-3xl text-blue-500/40 hover:text-blue-300/60 transition-all duration-300">Queue</h1>
                             <Tooltip id="clear_queue" delayShow={0} delayHide={0} content={"Clear the queue"} />
                             <button
                                 data-tooltip-id="clear_queue"
-                                className="p-2 text-gray-400 hover:text-red-500 hover:bg-gray-700/60 rounded-full transition-all"
+                                className={`${isMobile ? 'p-3' : 'p-2'} text-gray-400 hover:text-red-500 hover:bg-gray-700/60 rounded-full transition-all`}
                                 onClick={() => setQueueState(prev => ({ ...prev, items: [] }))}
                             >
-                                <Trash2 className="w-4 h-4" />
+                                <Trash2 className={`${isMobile ? 'w-5 h-5' : 'w-4 h-4'}`} />
                             </button>
                             <Tooltip id="shuffle_queue" delayShow={0} delayHide={0} content={"Shuffle the queue"} />
                             <button
                                 data-tooltip-id="shuffle_queue"
-                                className="p-2 text-gray-400 hover:text-blue-500 hover:bg-gray-700/60 rounded-full transition-all"
+                                className={`p-2 text-gray-400 hover:text-blue-500 hover:bg-gray-700/60 rounded-full transition-all`}
                                 onClick={() => setQueueState(prev => ({ ...prev, items: [...prev.items].sort(() => Math.random() - 0.5) }))}>
                                 <ShuffleIcon className="w-4 h-4" />
                             </button>
@@ -685,16 +719,20 @@ const AudioPlayerComponent = () => {
                                 </button>
                             </div>
                         </div>
+
+                        {/* Queue items with mobile optimizations */}
                         {queue?.length > 0 ? (
                             <div className="flex flex-wrap gap-4 p-4 w-full justify-center items-center overflow-y-auto max-h-[30dvh]">
                                 {queue.map((song, index) => (
                                     <div
                                         key={`${song.id}_${index}`}
-                                        className={`flex gap-4 w-[70%] max-w-[70%] h-24 rounded-lg bg-gray-800/95 p-4 relative transition-colors duration-200 ${draggedItem === index ? 'bg-gray-700/95 shadow-xl' : ''}`}
+                                        className={`flex gap-4 w-full md:w-[70%] md:max-w-[70%] h-24 rounded-lg bg-gray-800/95 p-4 relative transition-colors duration-200 ${draggedItem === index ? 'bg-gray-700/95 shadow-xl' : ''}`}
                                         draggable
                                         onDragStart={(e) => handleDragStart(e, index)}
                                         onDragOver={(e) => handleDragOver(e, index)}
                                         onDragEnd={handleDragEnd}
+                                        // Add mobile touch handlers
+                                        onTouchStart={isMobile ? () => handleTouchStart(index) : undefined}
                                     >
                                         <div className="flex items-center px-1">
                                             <div
@@ -746,23 +784,24 @@ const AudioPlayerComponent = () => {
                         )}
                     </div>
 
-                    {/* Search Results Sidebar */}
+                    {/* Search Results Sidebar - Full screen on mobile */}
                     <div
                         className={`fixed top-0 right-0 h-full bg-gray-800/95 backdrop-blur-sm transform transition-all duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full'
-                            } ${isMobile ? 'w-full' : 'w-96'} overflow-y-auto border-l border-gray-700/50 z-50`}
+                            } ${isMobile ? 'w-full z-[100]' : 'w-96'} overflow-y-auto border-l border-gray-700/50 z-50`}
                     >
                         <div className="p-4 sticky top-0 bg-gray-800/95 backdrop-blur-sm border-b border-gray-700/50 z-10">
                             <div className="flex justify-between items-center">
-                                <h2 className="text-xl font-bold">Search Results</h2>
+                                <h2 className="text-xl font-bold">{isMobile ? 'Results' : 'Search Results'}</h2>
                                 <button
                                     onClick={() => setSearchState(prev => ({ ...prev, isSidebarOpen: false }))}
-                                    className="p-2 hover:bg-gray-700/50 rounded-lg transition-colors"
+                                    className={`${isMobile ? 'p-3' : 'p-2'} hover:bg-gray-700/50 rounded-lg transition-colors`}
                                 >
-                                    <X className="w-6 h-6" />
+                                    <X className={`${isMobile ? 'w-7 h-7' : 'w-6 h-6'}`} />
                                 </button>
                             </div>
                         </div>
 
+                        {/* Results with optimized layout for mobile */}
                         <div className="p-4 space-y-4">
                             {isLoadingVideo ? (
                                 <div className="flex justify-center items-center h-64">
@@ -833,7 +872,7 @@ const AudioPlayerComponent = () => {
                 audioLoaded={audioLoaded}
                 isVisible={showVisualizer}
             />
-            <dialog id="filter-dialog" className="bg-gray-800 text-white rounded-lg p-6 shadow-2xl backdrop:bg-black/70">
+            <dialog id="filter-dialog" className="bg-gray-800 text-white rounded-lg p-6 md:p-6 p-4 shadow-2xl backdrop:bg-black/70 w-[90vw] md:w-auto max-w-md">
                 <div className="flex justify-between items-center mb-4">
                     <h3 className="text-xl font-bold">Audio Filters</h3>
                     <button
