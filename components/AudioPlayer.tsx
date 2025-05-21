@@ -4,14 +4,14 @@ import "./AudioPlayerComponent.css";
 import "react-tooltip/dist/react-tooltip.css";
 
 import {
-	ArrowUp, Clock, GripVertical, List, Menu, Music, PauseIcon, Play, PlayIcon, Plus, Search,
-	SearchCheck, ShuffleIcon, Timer, Trash2, UserIcon, X
+	ArrowUp, Clock, Eye, EyeOff, GripVertical, List, Menu, Music, PauseIcon, Play, PlayIcon, Plus,
+	Search, SearchCheck, ShuffleIcon, Timer, Trash2, UserIcon, X
 } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
 import AudioPlayer from "react-h5-audio-player";
 import { Tooltip } from "react-tooltip";
 
-import { AudioVisualizer } from "./AudioVisualizer";
+import AudioVisualizer from "./AudioVisualizer";
 
 import type { JSONVideoData } from "../types/MusicManager";
 
@@ -31,6 +31,10 @@ interface PlayerState {
     audioSrc: string;
     isLoading: boolean;
     autoplayEnabled: boolean;
+    currentFilters: string[];
+    filterParams: {
+        bassBoost: number; // dB value for bass boost
+    };
 }
 
 interface QueueState {
@@ -48,6 +52,9 @@ const STORAGE_KEYS = {
 const AudioPlayerComponent = () => {
     // UI state
     const [isMobile, setIsMobile] = useState<boolean>(false);
+    const [showVisualizer, setShowVisualizer] = useState<boolean>(true);
+
+    const [audioLoaded, setAudioLoaded] = useState<boolean>(false);
 
     // Grouped states
     const [searchState, setSearchState] = useState<SearchState>({
@@ -64,7 +71,11 @@ const AudioPlayerComponent = () => {
         currentVideo: null,
         audioSrc: "",
         isLoading: false,
-        autoplayEnabled: localStorage.getItem(STORAGE_KEYS.AUTOPLAY) === 'true'
+        autoplayEnabled: localStorage.getItem(STORAGE_KEYS.AUTOPLAY) === 'true',
+        currentFilters: [],
+        filterParams: {
+            bassBoost: 10 // Default value in dB
+        }
     });
 
     const [queueState, setQueueState] = useState<QueueState>({
@@ -75,6 +86,12 @@ const AudioPlayerComponent = () => {
 
     // We need to reference the tooltip's anchor directly
     const toggleRef = useRef<HTMLDivElement>(null);
+
+    // Inside the AudioPlayerComponent, add this ref
+    const audioElementRef = useRef<AudioPlayer>(null);
+
+    // Add this new state to track playback position
+    const [currentPlaybackPosition, setCurrentPlaybackPosition] = useState<number>(0);
 
     // Load queue from localStorage on component mount
     useEffect(() => {
@@ -109,7 +126,22 @@ const AudioPlayerComponent = () => {
     // Function to fetch the audio source for a video
     const fetchAudioSource = async (videoUrl: string) => {
         try {
-            const audioResponse = await fetch(`/api/stream?videoUrl=${encodeURIComponent(videoUrl)}`);
+            const filters = playerState.currentFilters;
+            const queryParams = new URLSearchParams();
+
+            // Don't encode the videoUrl since URLSearchParams will handle that
+            queryParams.append('videoUrl', videoUrl);
+
+            if (filters.length > 0) {
+                queryParams.append('filters', filters.join(','));
+
+                // Add bass boost level parameter if bass filter is active
+                if (filters.includes('bass')) {
+                    queryParams.append('bassBoost', playerState.filterParams.bassBoost.toString());
+                }
+            }
+
+            const audioResponse = await fetch(`/api/stream?${queryParams}`);
             return await audioResponse.blob();
         } catch (error) {
             console.error("Failed to fetch audio source", error);
@@ -219,7 +251,7 @@ const AudioPlayerComponent = () => {
         }
     };
 
-    const handleSelectVideo = async (selectedVideo: JSONVideoData) => {
+    const handleSelectVideo = async (selectedVideo: JSONVideoData, preservePosition = false) => {
         setPlayerState(prev => ({
             ...prev,
             currentVideo: selectedVideo,
@@ -232,11 +264,32 @@ const AudioPlayerComponent = () => {
 
             if (!blob) throw new Error("no blob found");
 
+            // Save current URL to revoke later
+            const previousSrc = playerState.audioSrc;
+
+            // Create and set new audio source URL
+            const newAudioSrc = URL.createObjectURL(blob);
+
             setPlayerState(prev => ({
                 ...prev,
-                audioSrc: URL.createObjectURL(blob),
+                audioSrc: newAudioSrc,
                 isLoading: false
             }));
+
+            // Revoke previous object URL to prevent memory leaks
+            if (previousSrc) {
+                URL.revokeObjectURL(previousSrc);
+            }
+
+            // If we're preserving position, set it after a short delay to ensure the new audio loads
+            if (preservePosition && audioElementRef.current?.audio?.current) {
+                setTimeout(() => {
+                    if (audioElementRef.current?.audio?.current) {
+                        audioElementRef.current.audio.current.currentTime = currentPlaybackPosition;
+                        audioElementRef.current.audio.current.play();
+                    }
+                }, 100);
+            }
         } catch (error) {
             console.error("Error fetching audio stream:", error);
             setPlayerState(prev => ({ ...prev, isLoading: false }));
@@ -257,6 +310,7 @@ const AudioPlayerComponent = () => {
     };
 
     const handleEndedAudio = async () => {
+        setAudioLoaded(false);
         if (!playerState.currentVideo?.id) return;
 
         if (queueState.items.length) {
@@ -343,16 +397,121 @@ const AudioPlayerComponent = () => {
         setQueueState(prev => ({ ...prev, draggedItem: null }));
     };
 
+    // Update the applyFiltersLive function to handle timing better
+    const applyFiltersLive = async () => {
+        if (!playerState.currentVideo) return;
+
+        // Get current playing status
+        const audioEl = audioElementRef.current?.audio?.current;
+        const wasPlaying = audioEl ? !audioEl.paused : false;
+
+        // Mark the request start time
+        const requestStartTime = Date.now();
+        let positionAtRequestStart = 0;
+
+        if (audioEl) {
+            positionAtRequestStart = audioEl.currentTime;
+        }
+
+        // Reload the current video with new filters
+        setPlayerState(prev => ({
+            ...prev,
+            isLoading: true
+        }));
+
+        try {
+            const blob = await fetchAudioSource(playerState.currentVideo.url);
+
+            if (!blob) throw new Error("no blob found");
+
+            // Calculate time elapsed during request
+            const requestDuration = (Date.now() - requestStartTime) / 1000; // in seconds
+
+            // Calculate the adjusted position (original position + request time)
+            let adjustedPosition = positionAtRequestStart;
+            if (wasPlaying) {
+                adjustedPosition += requestDuration;
+            }
+
+            // Save current URL to revoke later
+            const previousSrc = playerState.audioSrc;
+
+            // Create and set new audio source URL
+            const newAudioSrc = URL.createObjectURL(blob);
+
+            setPlayerState(prev => ({
+                ...prev,
+                audioSrc: newAudioSrc,
+                isLoading: false
+            }));
+
+            // Revoke previous object URL to prevent memory leaks
+            if (previousSrc) {
+                URL.revokeObjectURL(previousSrc);
+            }
+
+            // Apply the adjusted position after a short delay to ensure the new audio loads
+            setTimeout(() => {
+                if (audioElementRef.current?.audio?.current) {
+                    // Set the calculated position
+                    setCurrentPlaybackPosition(adjustedPosition);
+                    audioElementRef.current.audio.current.currentTime = adjustedPosition;
+
+                    // Restore playing state
+                    if (wasPlaying) {
+                        audioElementRef.current.audio.current.play();
+                    }
+                }
+            }, 100);
+        } catch (error) {
+            console.error("Error applying filters:", error);
+            setPlayerState(prev => ({ ...prev, isLoading: false }));
+        }
+    };
+
+    // Add an event listener to track current playback position
+    useEffect(() => {
+        const audioEl = audioElementRef.current?.audio?.current;
+        if (!audioEl) return;
+
+        const updatePosition = () => {
+            setCurrentPlaybackPosition(audioEl.currentTime);
+        };
+
+        audioEl.addEventListener('timeupdate', updatePosition);
+        return () => {
+            audioEl.removeEventListener('timeupdate', updatePosition);
+        };
+    }, [playerState.audioSrc]); // Re-attach when audio source changes
+
     // Destructure state for easier access in JSX
     const { query, results, isLoading: isLoadingVideo, mode: searchMode, isSidebarOpen, showAutoSwitchTooltip } = searchState;
-    const { currentVideo: videoData, audioSrc, isLoading: isLoadingAudio, autoplayEnabled } = playerState;
+    const { currentVideo: videoData, audioSrc, isLoading: isLoadingAudio, autoplayEnabled, currentFilters } = playerState;
     const { items: queue, draggedItem } = queueState;
+
+    // Add this useEffect to update the document title when a song changes
+    useEffect(() => {
+        // Store original document title when component mounts
+        const originalTitle = document.title;
+
+        // Update title when song changes
+        if (playerState.currentVideo?.title) {
+            document.title = `${playerState.currentVideo.title} - Music-Manager`;
+        } else {
+            document.title = originalTitle;
+        }
+
+        // Restore original title when component unmounts
+        return () => {
+            document.title = originalTitle;
+        };
+    }, [playerState.currentVideo]);
 
     return (
         <>
             <h1 className="text-blue-500/40 hover:text-blue-300/60 text-3xl font-bold top-4 left-4 absolute">Music-Manager Player</h1>
-            <div className={`flex w-full items-center ${isSidebarOpen ? "justify-start pl-32" : "justify-center"}`}>
-                <div className="w-[50dvw] rounded-2xl bg-gradient-to-br from-[#0c111c] to-[#131934] text-white relative max-h-[90dvh]">
+            <div className="flex w-full items-center justify-center">
+                <div className={`w-[50dvw] rounded-2xl bg-gradient-to-br from-[#0c111c] to-[#131934] text-white relative max-h-[90dvh] transition-all duration-300 ${isSidebarOpen && !isMobile ? "mr-96" : ""}`}>
                     {/* Main Content */}
                     <div className={`transition-all duration-300 px-4`}>
                         <div className={`container mx-auto py-8 transition-all duration-300 max-w-4xl`}>
@@ -437,17 +596,23 @@ const AudioPlayerComponent = () => {
                                     {isLoadingAudio && <div className="flex justify-center items-center h-24">
                                         <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
                                     </div>}
-                                    {audioSrc && <AudioPlayer
-                                        src={audioSrc}
-                                        autoPlay
-                                        showJumpControls
-                                        showSkipControls
-                                        onClickNext={() => {
-                                            return handleEndedAudio();
-                                        }}
-                                        className="rounded-lg overflow-hidden shadow-lg relative z-20"
-                                        onEnded={() => handleEndedAudio()}
-                                    />}
+                                    {audioSrc && (
+                                        <>
+                                            <AudioPlayer
+                                                src={audioSrc}
+                                                autoPlay
+                                                showJumpControls
+                                                showSkipControls
+                                                onClickNext={() => {
+                                                    return handleEndedAudio();
+                                                }}
+                                                className="rounded-lg overflow-hidden shadow-lg relative z-20"
+                                                onEnded={() => handleEndedAudio()}
+                                                onLoadStart={() => setAudioLoaded(true)}
+                                                ref={audioElementRef}
+                                            />
+                                        </>
+                                    )}
                                 </div>
                             )}
 
@@ -469,7 +634,7 @@ const AudioPlayerComponent = () => {
                         </button>
                     )}
                     <div className="flex flex-wrap gap-4 p-4 w-full justify-center items-center">
-                        <div className="w-full flex items-center justify-center gap-4">
+                        <div className="w-full flex items-center justify-center gap-x-4 gap-y-2 flex-wrap">
                             <h1 className="text-3xl text-blue-500/40 hover:text-blue-300/60 transition-all duration-300">Queue</h1>
                             <Tooltip id="clear_queue" delayShow={0} delayHide={0} content={"Clear the queue"} />
                             <button
@@ -494,6 +659,31 @@ const AudioPlayerComponent = () => {
                             >
                                 {autoplayEnabled ? <PlayIcon className="w-4 h-4" /> : <PauseIcon className="w-4 h-4" />} Autoplay
                             </button>
+                            <Tooltip id="toggle_visualizer" delayShow={0} delayHide={0} content={showVisualizer ? "Hide audio visualizer" : "Show audio visualizer"} />
+                            <button
+                                data-tooltip-id="toggle_visualizer"
+                                className={`p-2 ${showVisualizer ? 'text-blue-400' : 'text-gray-400'} hover:text-blue-500 hover:bg-gray-700/60 rounded-full transition-all flex items-center gap-2`}
+                                onClick={() => setShowVisualizer(prev => !prev)}
+                            >
+                                {showVisualizer ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                {showVisualizer ? 'Hide' : 'Show'} Visualizer
+                            </button>
+                            <div className="relative group">
+                                <Tooltip id="audio_filters" delayShow={0} delayHide={0} content="Apply audio filters" />
+                                <button
+                                    data-tooltip-id="audio_filters"
+                                    className={`p-2 ${currentFilters.length > 0 ? 'text-purple-400' : 'text-gray-400'} hover:text-purple-500 hover:bg-gray-700/60 rounded-full transition-all flex items-center gap-2`}
+                                    onClick={() => {
+                                        const dialog = document.getElementById('filter-dialog');
+                                        if (dialog && typeof (dialog as any).showModal === 'function') {
+                                            (dialog as any).showModal();
+                                        }
+                                    }}
+                                >
+                                    <Music className="w-4 h-4" />
+                                    Filters ({currentFilters.length})
+                                </button>
+                            </div>
                         </div>
                         {queue?.length > 0 ? (
                             <div className="flex flex-wrap gap-4 p-4 w-full justify-center items-center overflow-y-auto max-h-[30dvh]">
@@ -637,8 +827,134 @@ const AudioPlayerComponent = () => {
                 </div>
             </div>
 
-            {/* Add the visualizer at the bottom of the page if audio is playing */}
-            {audioSrc && <AudioVisualizer />}
+            {/* Always render AudioVisualizer, control visibility via prop */}
+            <AudioVisualizer
+                audioElementRef={audioElementRef?.current?.audio?.current}
+                audioLoaded={audioLoaded}
+                isVisible={showVisualizer}
+            />
+            <dialog id="filter-dialog" className="bg-gray-800 text-white rounded-lg p-6 shadow-2xl backdrop:bg-black/70">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xl font-bold">Audio Filters</h3>
+                    <button
+                        onClick={() => {
+                            const dialog = document.getElementById('filter-dialog');
+                            if (dialog) {
+                                (dialog as any).close();
+                            }
+                        }}
+                        className="p-1 hover:bg-gray-700 rounded-full"
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                    {[
+                        { id: 'bass', label: 'Bass Boost', icon: '🔊' },
+                        { id: 'subboost', label: 'Sub Boost', icon: '📢' },
+                        { id: 'subcut', label: 'Sub Cut (Reduce)', icon: '📢' },
+                        { id: 'echo', label: 'Echo', icon: '🔄' },
+                        { id: 'normalize', label: 'Normalize', icon: '📊' },
+                        { id: 'reverb', label: 'Reverb', icon: '🌊' },
+                        { id: 'nightcore', label: 'Nightcore', icon: '⚡' }
+                    ].map(filter => (
+                        <div
+                            key={filter.id}
+                            className={`flex items-center gap-2 p-3 rounded-lg cursor-pointer transition-colors
+                                ${currentFilters.includes(filter.id)
+                                    ? 'bg-purple-600/60 hover:bg-purple-600/80'
+                                    : 'bg-gray-700/60 hover:bg-gray-700/80'}`}
+                            onClick={() => {
+                                setPlayerState(prev => {
+                                    const newFilters = prev.currentFilters.includes(filter.id)
+                                        ? prev.currentFilters.filter(f => f !== filter.id)
+                                        : [...prev.currentFilters, filter.id];
+
+                                    return {
+                                        ...prev,
+                                        currentFilters: newFilters
+                                    };
+                                });
+                            }}
+                        >
+                            <span className="text-lg">{filter.icon}</span>
+                            <span>{filter.label}</span>
+                            {currentFilters.includes(filter.id) && (
+                                <svg className="w-4 h-4 ml-auto text-white" fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path d="M5 13l4 4L19 7"></path>
+                                </svg>
+                            )}
+                        </div>
+                    ))}
+                </div>
+
+                {/* Bass Boost Level Slider - Only show when bass is selected */}
+                {currentFilters.includes('bass') && (
+                    <div className="mb-4 p-3 bg-gray-700/60 rounded-lg">
+                        <div className="flex justify-between items-center mb-2">
+                            <label htmlFor="bassBoostSlider" className="text-sm font-medium">
+                                Bass Boost Level: {playerState.filterParams.bassBoost} dB
+                            </label>
+                        </div>
+                        <input
+                            id="bassBoostSlider"
+                            type="range"
+                            min="-20"
+                            max="20"
+                            step="1"
+                            value={playerState.filterParams.bassBoost}
+                            onChange={(e) => {
+                                const value = parseInt(e.target.value, 10);
+                                setPlayerState(prev => ({
+                                    ...prev,
+                                    filterParams: {
+                                        ...prev.filterParams,
+                                        bassBoost: value
+                                    }
+                                }));
+                            }}
+                            className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                        />
+                        <div className="flex justify-between text-xs text-gray-400 mt-1">
+                            <span>1 dB</span>
+                            <span>10 dB</span>
+                            <span>20 dB</span>
+                        </div>
+                    </div>
+                )}
+
+                <div className="flex justify-between mt-4">
+                    <button
+                        className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition-colors"
+                        onClick={() => {
+                            setPlayerState(prev => ({
+                                ...prev,
+                                currentFilters: []
+                            }));
+                        }}
+                    >
+                        Clear All
+                    </button>
+
+                    <button
+                        className="bg-purple-600 hover:bg-purple-500 px-4 py-2 rounded-lg transition-colors"
+                        onClick={() => {
+                            const dialog = document.getElementById('filter-dialog');
+                            if (dialog) {
+                                (dialog as any).close();
+                            }
+
+                            // Apply filters to current track if one is playing
+                            if (playerState.currentVideo) {
+                                applyFiltersLive();
+                            }
+                        }}
+                    >
+                        Apply Filters
+                    </button>
+                </div>
+            </dialog>
         </>
     );
 };

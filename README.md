@@ -13,6 +13,7 @@ A modern, feature-rich music player built with Next.js that allows you to search
 - **Responsive Design**: Works on desktop and mobile devices
 - **Autoplay**: Automatically play related tracks
 - **Persistent Storage**: Your queue and settings are saved between sessions
+- **Audio Filters**: Apply audio filters to the audio being played (FFMPEG filters like: bass boost, sub boost, sub cut, echo, normalize, reverb, nightcore)
 
 ## 🛠️ Technology Stack
 
@@ -41,7 +42,7 @@ A modern, feature-rich music player built with Next.js that allows you to search
 
 2. Install dependencies:
    ```bash
-   npm install
+   npm install --force
    # or
    yarn install
    ```

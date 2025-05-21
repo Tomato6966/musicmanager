@@ -7,7 +7,7 @@ export default function Home() {
   return (
     <div className="flex flex-col justify-center min-h-screen bg-gray-950 p-8">
       <Head>
-        <title>YouTube Audio Streamer</title>
+        <title>Music Manager</title>
       </Head>
       <AudioPlayer />
     </div>
